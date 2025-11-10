@@ -1,0 +1,24 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Expo
+.expo/
+.expo-shared/
+
+# Python venv
+venv/
+.env
+__pycache__/
+*.py[cod]
+*.sqlite3
+
+# IDEs & OS
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+Thumbs.db
