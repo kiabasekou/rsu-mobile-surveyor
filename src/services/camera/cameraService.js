@@ -1,67 +1,106 @@
-// =============================================================================
-// 🇬🇦 RSU GABON - CAMERA SERVICE COMPLET
-// Fichier: src/services/camera/cameraService.js
-// Gestion capture photos, signatures, compression et upload
-// =============================================================================
-
-import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
-import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import apiClient from '../api/apiClient';
-import { Alert } from 'react-native';
-
 /**
- * Service de gestion caméra et photos
- * Capture, compression, signature, upload
+ * =============================================================================
+ * 🇬🇦 RSU GABON - CAMERA SERVICE
+ * Standards Top 1% - Capture Photos Documents
+ * =============================================================================
+ * 
+ * Service de capture et gestion photos pour documents d'identité.
+ * Utilise expo-camera et expo-image-picker avec compression automatique.
+ * 
+ * Fonctionnalités:
+ * - Capture photo caméra native
+ * - Sélection depuis galerie
+ * - Compression intelligente
+ * - Upload vers serveur Django
+ * - Sauvegarde locale offline
+ * 
+ * Fichier: src/services/camera/cameraService.js
+ * =============================================================================
  */
 
+import * as Camera from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
+import { Alert, Platform } from 'react-native';
+import apiClient from '../api/apiClient';
+import storageService from '../storage/storageService';
+
 class CameraService {
-  constructor() {
-    this.IMAGE_CONFIG = {
-      quality: 0.7,
-      maxWidth: 1280,
-      maxHeight: 1280,
-      allowsEditing: false,
-      base64: false,
-    };
-
-    this.SIGNATURE_CONFIG = {
-      penColor: '#000000',
-      backgroundColor: '#ffffff',
-      strokeWidth: 3,
-    };
-
-    this.UPLOAD_CONFIG = {
-      endpoint: '/media/upload/',
-      maxSizeBytes: 5 * 1024 * 1024, // 5MB
-    };
-  }
+  /**
+   * Configuration compression images
+   */
+  COMPRESSION_CONFIG = {
+    quality: 0.8,          // Qualité JPEG 80%
+    maxWidth: 1920,        // Largeur max 1920px
+    maxHeight: 1080,       // Hauteur max 1080px
+    base64: true,          // Inclure base64 pour preview
+  };
 
   /**
-   * Demander permissions caméra
+   * Taille maximum fichier (5MB)
+   */
+  MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB en bytes
+
+  /**
+   * Types de documents supportés
+   */
+  DOCUMENT_TYPES = {
+    NATIONAL_ID: 'national_id',
+    BIRTH_CERTIFICATE: 'birth_certificate',
+    RESIDENCE: 'residence_certificate',
+    INCOME_PROOF: 'income_proof',
+    BANK_RIB: 'bank_rib',
+    OTHER: 'other_document',
+  };
+
+  /**
+   * ==========================================================================
+   * PERMISSIONS CAMÉRA
+   * ==========================================================================
+   */
+
+  /**
+   * Demande permissions caméra
+   * 
+   * @returns {Promise<boolean>} - true si accordé
    */
   async requestCameraPermissions() {
     try {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      const { status } = await Camera.requestCameraPermissionsAsync();
       
       if (status !== 'granted') {
         Alert.alert(
-          'Permission requise',
-          'L\'application a besoin d\'accéder à la caméra pour prendre des photos.',
-          [{ text: 'OK' }]
+          'Permission Caméra',
+          'L\'application a besoin d\'accéder à la caméra pour photographier les documents.',
+          [
+            { text: 'Annuler', style: 'cancel' },
+            { 
+              text: 'Paramètres', 
+              onPress: () => {
+                if (Platform.OS === 'ios') {
+                  Linking.openURL('app-settings:');
+                } else {
+                  Linking.openSettings();
+                }
+              }
+            }
+          ]
         );
         return false;
       }
 
       return true;
     } catch (error) {
-      console.error('Erreur permission caméra:', error);
+      console.error('Erreur demande permission caméra:', error);
+      Alert.alert('Erreur', 'Impossible de demander les permissions caméra');
       return false;
     }
   }
 
   /**
-   * Demander permissions galerie
+   * Demande permissions galerie photos
+   * 
+   * @returns {Promise<boolean>} - true si accordé
    */
   async requestGalleryPermissions() {
     try {
@@ -69,8 +108,8 @@ class CameraService {
       
       if (status !== 'granted') {
         Alert.alert(
-          'Permission requise',
-          'L\'application a besoin d\'accéder à la galerie.',
+          'Permission Galerie',
+          'L\'application a besoin d\'accéder à la galerie pour sélectionner des photos.',
           [{ text: 'OK' }]
         );
         return false;
@@ -78,413 +117,439 @@ class CameraService {
 
       return true;
     } catch (error) {
-      console.error('Erreur permission galerie:', error);
+      console.error('Erreur demande permission galerie:', error);
       return false;
     }
   }
 
   /**
-   * Prendre une photo avec la caméra
+   * ==========================================================================
+   * CAPTURE PHOTO
+   * ==========================================================================
    */
-  async takePicture(options = {}) {
+
+  /**
+   * Capture une photo avec la caméra
+   * 
+   * @param {string} documentType - Type de document (DOCUMENT_TYPES)
+   * @param {Object} options - Options supplémentaires
+   * @returns {Promise<Object>} - Résultat capture
+   */
+  async captureDocument(documentType = this.DOCUMENT_TYPES.OTHER, options = {}) {
     try {
-      // Vérifier permission
+      // Vérifier permissions
       const hasPermission = await this.requestCameraPermissions();
       if (!hasPermission) {
-        throw new Error('Permission caméra refusée');
+        return {
+          success: false,
+          error: 'Permission caméra refusée',
+        };
       }
 
-      // Lancer caméra
+      // Lancer l'appareil photo
       const result = await ImagePicker.launchCameraAsync({
-        ...this.IMAGE_CONFIG,
-        ...options,
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: this.COMPRESSION_CONFIG.quality,
+        base64: this.COMPRESSION_CONFIG.base64,
+        exif: true,
       });
 
-      if (result.cancelled || result.canceled) {
-        return null;
+      if (result.canceled) {
+        return {
+          success: false,
+          error: 'Capture annulée',
+        };
       }
 
-      console.log('📷 Photo capturée:', result.uri);
-
-      // Compresser image
-      const compressed = await this.compressImage(result.uri);
+      // Traiter l'image capturée
+      const processedImage = await this._processImage(result.assets[0], documentType);
 
       return {
-        uri: compressed.uri,
-        width: compressed.width,
-        height: compressed.height,
-        size: await this.getFileSize(compressed.uri),
-        type: 'image/jpeg',
-        name: `photo_${Date.now()}.jpg`,
+        success: true,
+        image: processedImage,
       };
-
     } catch (error) {
-      console.error('Erreur capture photo:', error);
-      throw new Error('Impossible de prendre la photo');
+      console.error('Erreur capture document:', error);
+      return {
+        success: false,
+        error: error.message,
+      };
     }
   }
 
   /**
-   * Sélectionner image depuis galerie
+   * Sélectionne une photo depuis la galerie
+   * 
+   * @param {string} documentType - Type de document
+   * @returns {Promise<Object>} - Résultat sélection
    */
-  async pickImageFromGallery(options = {}) {
+  async pickFromGallery(documentType = this.DOCUMENT_TYPES.OTHER) {
     try {
-      // Vérifier permission
+      // Vérifier permissions
       const hasPermission = await this.requestGalleryPermissions();
       if (!hasPermission) {
-        throw new Error('Permission galerie refusée');
+        return {
+          success: false,
+          error: 'Permission galerie refusée',
+        };
       }
 
-      // Lancer sélecteur
+      // Ouvrir la galerie
       const result = await ImagePicker.launchImageLibraryAsync({
-        ...this.IMAGE_CONFIG,
-        ...options,
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: this.COMPRESSION_CONFIG.quality,
+        base64: this.COMPRESSION_CONFIG.base64,
+        exif: true,
       });
 
-      if (result.cancelled || result.canceled) {
-        return null;
+      if (result.canceled) {
+        return {
+          success: false,
+          error: 'Sélection annulée',
+        };
       }
 
-      console.log('🖼️ Image sélectionnée:', result.uri);
-
-      // Compresser image
-      const compressed = await this.compressImage(result.uri);
+      // Traiter l'image sélectionnée
+      const processedImage = await this._processImage(result.assets[0], documentType);
 
       return {
-        uri: compressed.uri,
-        width: compressed.width,
-        height: compressed.height,
-        size: await this.getFileSize(compressed.uri),
-        type: 'image/jpeg',
-        name: `image_${Date.now()}.jpg`,
+        success: true,
+        image: processedImage,
       };
-
     } catch (error) {
-      console.error('Erreur sélection image:', error);
-      throw new Error('Impossible de sélectionner l\'image');
+      console.error('Erreur sélection galerie:', error);
+      return {
+        success: false,
+        error: error.message,
+      };
     }
   }
 
   /**
-   * Compresser image
+   * Affiche un menu de choix (Caméra ou Galerie)
+   * 
+   * @param {string} documentType - Type de document
+   * @returns {Promise<Object>} - Résultat capture
    */
-  async compressImage(uri, quality = 0.7) {
-    try {
-      console.log('🗜️ Compression image...');
+  async showImagePickerMenu(documentType = this.DOCUMENT_TYPES.OTHER) {
+    return new Promise((resolve) => {
+      Alert.alert(
+        'Ajouter une Photo',
+        'Choisissez une option',
+        [
+          {
+            text: 'Prendre une Photo',
+            onPress: async () => {
+              const result = await this.captureDocument(documentType);
+              resolve(result);
+            },
+          },
+          {
+            text: 'Choisir depuis Galerie',
+            onPress: async () => {
+              const result = await this.pickFromGallery(documentType);
+              resolve(result);
+            },
+          },
+          {
+            text: 'Annuler',
+            style: 'cancel',
+            onPress: () => resolve({ success: false, error: 'Annulé' }),
+          },
+        ]
+      );
+    });
+  }
 
-      const compressed = await manipulateAsync(
+  /**
+   * ==========================================================================
+   * TRAITEMENT IMAGE
+   * ==========================================================================
+   */
+
+  /**
+   * Traite une image (compression, validation, métadonnées)
+   * 
+   * @param {Object} imageAsset - Asset ImagePicker
+   * @param {string} documentType - Type de document
+   * @returns {Promise<Object>} - Image traitée
+   */
+  async _processImage(imageAsset, documentType) {
+    try {
+      const uri = imageAsset.uri;
+      const fileInfo = await FileSystem.getInfoAsync(uri);
+
+      // Validation taille
+      if (fileInfo.size > this.MAX_FILE_SIZE) {
+        throw new Error(`Fichier trop volumineux (max ${this.MAX_FILE_SIZE / 1024 / 1024}MB)`);
+      }
+
+      // Compression si nécessaire
+      let compressedUri = uri;
+      if (fileInfo.size > 2 * 1024 * 1024) { // > 2MB
+        compressedUri = await this._compressImage(uri);
+      }
+
+      // Extraire métadonnées
+      const metadata = {
+        width: imageAsset.width,
+        height: imageAsset.height,
+        size: fileInfo.size,
+        type: documentType,
+        captured_at: new Date().toISOString(),
+        exif: imageAsset.exif || {},
+      };
+
+      return {
+        uri: compressedUri,
+        base64: imageAsset.base64,
+        metadata: metadata,
+        documentType: documentType,
+      };
+    } catch (error) {
+      console.error('Erreur traitement image:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Compresse une image
+   * 
+   * @param {string} uri - URI de l'image
+   * @returns {Promise<string>} - URI de l'image compressée
+   */
+  async _compressImage(uri) {
+    try {
+      // Utiliser manipulateAsync pour compression
+      const manipResult = await ImageManipulator.manipulateAsync(
         uri,
         [
-          { resize: { width: this.IMAGE_CONFIG.maxWidth } }
+          { 
+            resize: { 
+              width: this.COMPRESSION_CONFIG.maxWidth 
+            } 
+          }
         ],
         {
-          compress: quality,
-          format: SaveFormat.JPEG,
+          compress: this.COMPRESSION_CONFIG.quality,
+          format: ImageManipulator.SaveFormat.JPEG,
         }
       );
 
-      const originalSize = await this.getFileSize(uri);
-      const compressedSize = await this.getFileSize(compressed.uri);
-      const savings = ((originalSize - compressedSize) / originalSize * 100).toFixed(1);
-
-      console.log(`✅ Image compressée: ${originalSize}B → ${compressedSize}B (${savings}% économisé)`);
-
-      return compressed;
-
+      return manipResult.uri;
     } catch (error) {
-      console.error('Erreur compression:', error);
-      // Retourner image originale en cas d'erreur
-      return { uri };
+      console.error('Erreur compression image:', error);
+      return uri; // Fallback: retourner l'original
     }
   }
 
   /**
-   * Obtenir taille fichier
+   * ==========================================================================
+   * UPLOAD SERVEUR
+   * ==========================================================================
    */
-  async getFileSize(uri) {
+
+  /**
+   * Upload une photo vers le serveur Django
+   * 
+   * @param {Object} image - Image traitée
+   * @param {string} personId - UUID de la personne
+   * @returns {Promise<Object>} - Résultat upload
+   */
+  async uploadDocument(image, personId) {
     try {
-      const fileInfo = await FileSystem.getInfoAsync(uri);
-      return fileInfo.size || 0;
-    } catch (error) {
-      console.error('Erreur lecture taille:', error);
-      return 0;
-    }
-  }
-
-  /**
-   * Vérifier taille fichier
-   */
-  async validateFileSize(uri) {
-    const size = await this.getFileSize(uri);
-    
-    if (size > this.UPLOAD_CONFIG.maxSizeBytes) {
-      const sizeMB = (size / 1024 / 1024).toFixed(2);
-      const maxMB = (this.UPLOAD_CONFIG.maxSizeBytes / 1024 / 1024).toFixed(2);
-      
-      return {
-        valid: false,
-        error: `Fichier trop volumineux (${sizeMB}MB). Maximum: ${maxMB}MB`
-      };
-    }
-
-    return { valid: true, size };
-  }
-
-  /**
-   * Upload image vers serveur
-   */
-  async uploadImage(imageData, metadata = {}) {
-    try {
-      console.log('📤 Upload image...');
-
-      // Vérifier taille
-      const sizeCheck = await this.validateFileSize(imageData.uri);
-      if (!sizeCheck.valid) {
-        throw new Error(sizeCheck.error);
-      }
-
       // Préparer FormData
       const formData = new FormData();
       
-      formData.append('file', {
-        uri: imageData.uri,
-        name: imageData.name || `image_${Date.now()}.jpg`,
-        type: imageData.type || 'image/jpeg',
+      // Ajouter le fichier
+      formData.append('document', {
+        uri: image.uri,
+        type: 'image/jpeg',
+        name: `${image.documentType}_${personId}_${Date.now()}.jpg`,
       });
 
-      // Ajouter metadata
-      if (metadata.type) formData.append('file_type', metadata.type);
-      if (metadata.category) formData.append('category', metadata.category);
-      if (metadata.description) formData.append('description', metadata.description);
+      // Ajouter métadonnées
+      formData.append('document_type', image.documentType);
+      formData.append('person_id', personId);
+      formData.append('metadata', JSON.stringify(image.metadata));
 
       // Upload
       const response = await apiClient.post(
-        this.UPLOAD_CONFIG.endpoint,
+        '/identity/persons/upload-document/',
         formData,
         {
           headers: {
             'Content-Type': 'multipart/form-data',
           },
-          timeout: 60000, // 60s pour upload
+          timeout: 60000, // 60 secondes pour upload
         }
       );
 
-      console.log('✅ Image uploadée:', response.data.url);
-
-      return {
-        success: true,
-        url: response.data.url,
-        fileId: response.data.file_id,
-      };
-
-    } catch (error) {
-      console.error('Erreur upload:', error);
-      
-      // Sauvegarder pour upload différé si offline
-      if (error.message.includes('Network')) {
+      if (response.data) {
         return {
-          success: false,
-          offline: true,
-          uri: imageData.uri,
-          error: 'Sauvegardé pour upload ultérieur'
+          success: true,
+          url: response.data.url,
+          document_id: response.data.id,
         };
       }
 
-      throw new Error('Impossible d\'uploader l\'image');
+      return {
+        success: false,
+        error: 'Réponse serveur invalide',
+      };
+    } catch (error) {
+      console.error('Erreur upload document:', error);
+      
+      // En cas d'erreur, sauvegarder localement pour sync ultérieure
+      await this._saveForOfflineSync(image, personId);
+
+      return {
+        success: false,
+        error: error.message,
+        savedOffline: true,
+      };
     }
   }
 
   /**
-   * Prendre photo profil
+   * ==========================================================================
+   * GESTION OFFLINE
+   * ==========================================================================
    */
-  async takeProfilePicture() {
-    return await this.takePicture({
-      allowsEditing: true,
-      aspect: [1, 1], // Carré
-      quality: 0.8,
-    });
+
+  /**
+   * Sauvegarde une image pour synchronisation ultérieure
+   * 
+   * @param {Object} image - Image à sauvegarder
+   * @param {string} personId - UUID de la personne
+   */
+  async _saveForOfflineSync(image, personId) {
+    try {
+      const key = `offline_document_${Date.now()}`;
+      const data = {
+        image: image,
+        personId: personId,
+        timestamp: new Date().toISOString(),
+        synced: false,
+      };
+
+      await storageService.setItem(key, JSON.stringify(data));
+      console.log('✅ Document sauvegardé pour sync offline');
+    } catch (error) {
+      console.error('Erreur sauvegarde offline document:', error);
+    }
   }
 
   /**
-   * Prendre photo document
+   * Récupère tous les documents en attente de sync
+   * 
+   * @returns {Promise<Array>} - Documents en attente
    */
-  async takeDocumentPicture() {
-    return await this.takePicture({
-      allowsEditing: false,
-      quality: 0.9, // Qualité élevée pour documents
-    });
-  }
+  async getPendingDocuments() {
+    try {
+      const allKeys = await storageService.getAllKeys();
+      const documentKeys = allKeys.filter(key => key.startsWith('offline_document_'));
 
-  /**
-   * Prendre photo habitation
-   */
-  async takeHousingPicture() {
-    return await this.takePicture({
-      allowsEditing: false,
-      quality: 0.7,
-    });
-  }
-
-  /**
-   * Capturer signature
-   * Note: Utilise react-native-signature-canvas
-   */
-  captureSignature() {
-    // Cette fonction retourne la configuration
-    // La capture réelle se fait via le component SignatureCanvas
-    return {
-      config: this.SIGNATURE_CONFIG,
-      onSave: async (base64) => {
-        try {
-          // Sauvegarder signature en fichier
-          const fileUri = `${FileSystem.documentDirectory}signature_${Date.now()}.png`;
-          
-          await FileSystem.writeAsStringAsync(
-            fileUri,
-            base64.replace('data:image/png;base64,', ''),
-            { encoding: FileSystem.EncodingType.Base64 }
-          );
-
-          console.log('✍️ Signature capturée:', fileUri);
-
-          return {
-            uri: fileUri,
-            base64: base64,
-            type: 'image/png',
-            name: `signature_${Date.now()}.png`,
-          };
-
-        } catch (error) {
-          console.error('Erreur sauvegarde signature:', error);
-          throw new Error('Impossible de sauvegarder la signature');
+      const documents = [];
+      for (const key of documentKeys) {
+        const data = await storageService.getItem(key);
+        if (data) {
+          documents.push({
+            key: key,
+            data: JSON.parse(data),
+          });
         }
       }
-    };
+
+      return documents;
+    } catch (error) {
+      console.error('Erreur récupération documents offline:', error);
+      return [];
+    }
   }
 
   /**
-   * Upload signature
+   * Synchronise tous les documents en attente
+   * 
+   * @returns {Promise<Object>} - Résultat de la synchronisation
    */
-  async uploadSignature(signatureData) {
-    return await this.uploadImage(signatureData, {
-      type: 'signature',
-      category: 'consent',
-    });
-  }
+  async syncPendingDocuments() {
+    try {
+      const pendingDocs = await this.getPendingDocuments();
+      
+      if (pendingDocs.length === 0) {
+        return {
+          success: true,
+          synced: 0,
+          message: 'Aucun document en attente',
+        };
+      }
 
-  /**
-   * Batch upload multiple images
-   */
-  async batchUploadImages(images = [], metadata = {}) {
-    const results = [];
-    let successCount = 0;
-    let failedCount = 0;
+      let synced = 0;
+      let failed = 0;
 
-    for (const image of images) {
-      try {
-        const result = await this.uploadImage(image, metadata);
-        results.push(result);
+      for (const doc of pendingDocs) {
+        const result = await this.uploadDocument(doc.data.image, doc.data.personId);
         
         if (result.success) {
-          successCount++;
+          // Supprimer du storage local
+          await storageService.removeItem(doc.key);
+          synced++;
         } else {
-          failedCount++;
-        }
-      } catch (error) {
-        failedCount++;
-        results.push({
-          success: false,
-          error: error.message,
-          uri: image.uri,
-        });
-      }
-    }
-
-    return {
-      total: images.length,
-      success: successCount,
-      failed: failedCount,
-      results: results,
-    };
-  }
-
-  /**
-   * Supprimer fichier local temporaire
-   */
-  async deleteLocalFile(uri) {
-    try {
-      await FileSystem.deleteAsync(uri, { idempotent: true });
-      console.log('🗑️ Fichier supprimé:', uri);
-      return true;
-    } catch (error) {
-      console.error('Erreur suppression:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Nettoyer fichiers temporaires
-   */
-  async cleanupTempFiles() {
-    try {
-      const tempDir = FileSystem.documentDirectory;
-      const files = await FileSystem.readDirectoryAsync(tempDir);
-      
-      let deletedCount = 0;
-      for (const file of files) {
-        if (file.startsWith('photo_') || file.startsWith('signature_')) {
-          const fileUri = `${tempDir}${file}`;
-          await this.deleteLocalFile(fileUri);
-          deletedCount++;
-        }
-      }
-
-      console.log(`🧹 ${deletedCount} fichiers temporaires supprimés`);
-      return deletedCount;
-
-    } catch (error) {
-      console.error('Erreur nettoyage:', error);
-      return 0;
-    }
-  }
-
-  /**
-   * Obtenir statistiques stockage
-   */
-  async getStorageStats() {
-    try {
-      const tempDir = FileSystem.documentDirectory;
-      const files = await FileSystem.readDirectoryAsync(tempDir);
-      
-      let totalSize = 0;
-      let imageCount = 0;
-      let signatureCount = 0;
-
-      for (const file of files) {
-        const fileUri = `${tempDir}${file}`;
-        const size = await this.getFileSize(fileUri);
-        totalSize += size;
-
-        if (file.startsWith('photo_') || file.startsWith('image_')) {
-          imageCount++;
-        } else if (file.startsWith('signature_')) {
-          signatureCount++;
+          failed++;
         }
       }
 
       return {
-        totalFiles: files.length,
-        images: imageCount,
-        signatures: signatureCount,
-        totalSizeBytes: totalSize,
-        totalSizeMB: (totalSize / 1024 / 1024).toFixed(2),
+        success: true,
+        synced: synced,
+        failed: failed,
+        total: pendingDocs.length,
       };
-
     } catch (error) {
-      console.error('Erreur stats stockage:', error);
-      return null;
+      console.error('Erreur sync documents:', error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * ==========================================================================
+   * HELPERS
+   * ==========================================================================
+   */
+
+  /**
+   * Retourne le libellé d'un type de document
+   */
+  getDocumentTypeLabel(documentType) {
+    const labels = {
+      [this.DOCUMENT_TYPES.NATIONAL_ID]: 'Carte d\'Identité Nationale (NIP)',
+      [this.DOCUMENT_TYPES.BIRTH_CERTIFICATE]: 'Acte de Naissance',
+      [this.DOCUMENT_TYPES.RESIDENCE]: 'Certificat de Résidence',
+      [this.DOCUMENT_TYPES.INCOME_PROOF]: 'Attestation de Revenus',
+      [this.DOCUMENT_TYPES.BANK_RIB]: 'RIB Bancaire',
+      [this.DOCUMENT_TYPES.OTHER]: 'Autre Document',
+    };
+    return labels[documentType] || 'Document';
+  }
+
+  /**
+   * Formate la taille de fichier
+   */
+  formatFileSize(bytes) {
+    if (bytes < 1024) {
+      return `${bytes} B`;
+    } else if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    } else {
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     }
   }
 }

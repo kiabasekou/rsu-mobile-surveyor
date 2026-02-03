@@ -195,7 +195,7 @@ export default function LoginScreen({ onLogin, isConnected = true }) {
         <Surface style={styles.headerSurface}>
           <View style={styles.header}>
             <Image
-              source={require('../../assets/images/rsu-gabon-logo.png')}
+              source={require('../../../assets/images/rsu-gabon-logo.png')}
               style={styles.logoImage} // CORRECTION : Utilisation du style déplacé
               resizeMode="contain"
             />
