@@ -1,16 +1,16 @@
 /**
  * =============================================================================
- * 🇬🇦 RSU GABON - BABEL CONFIGURATION (CORRIGÉE)
- * Standards Top 1% - Configuration Babel pour Expo 54
+ * 🇬🇦 RSU GABON - BABEL CONFIGURATION (MODE DEBUG)
  * =============================================================================
  */
 
-module.exports = function (api) {
+module.exports = function(api) {
   api.cache(true);
   return {
     presets: ['babel-preset-expo'],
     plugins: [
-      'react-native-reanimated/plugin',
+      // ❌ COMMENTER CETTE LIGNE
+      // 'react-native-reanimated/plugin',
     ],
   };
 };

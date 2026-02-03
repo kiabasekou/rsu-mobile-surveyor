@@ -1,22 +1,16 @@
 // =============================================================================
-// RSU GABON - APPLICATION MOBILE - IMPORTS CORRIGÉS ET THÈME FINALISÉ
-// Fichier: rsu-mobile-surveyor/App.jsx (VERSION FINALE CORRIGÉE)
+// RSU GABON - APPLICATION MOBILE
+// Fichier: App.jsx - Version finale corrigée et optimisée
 // =============================================================================
 
-
-
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, ActivityIndicator, LogBox } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { 
-  Provider as PaperProvider, 
-  MD3LightTheme, 
-  adaptNavigationTheme 
-} from 'react-native-paper';
+import { Provider as PaperProvider, MD3LightTheme } from 'react-native-paper';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import Icon from 'react-native-vector-icons/MaterialIcons';
+import { MaterialIcons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
 
 // Services
@@ -31,13 +25,13 @@ import PersonListScreen from './src/screens/Person/PersonListScreen.jsx';
 import SurveyFormScreen from './src/screens/Survey/SurveyFormScreen.jsx';
 import OfflineQueueScreen from './src/screens/Sync/OfflineQueueScreen.jsx';
 import ProfileScreen from './src/screens/Profile/ProfileScreen.jsx';
-import HouseholdFormScreen from './src/screens/Enrollment/HouseholdFormScreen';
-import MapViewScreen from './src/screens/Map/MapViewScreen';
+import HouseholdFormScreen from './src/screens/Enrollment/HouseholdFormScreen.jsx';
+import MapViewScreen from './src/screens/Map/MapViewScreen.jsx';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
-// COULEURS OFFICIELLES RSU GABON
+// Couleurs officielles RSU Gabon
 const RSU_COLORS = {
   primary: '#2E7D32',
   secondary: '#FDD835',
@@ -47,8 +41,10 @@ const RSU_COLORS = {
   text: '#212121',
   onPrimary: '#FFFFFF',
   onSecondary: '#000000',
+  error: '#D32F2F',
 };
 
+// Thème Paper adapté
 const customTheme = {
   ...MD3LightTheme,
   colors: {
@@ -58,11 +54,11 @@ const customTheme = {
     accent: RSU_COLORS.accent,
     background: RSU_COLORS.background,
     surface: RSU_COLORS.surface,
-    error: '#D32F2F',
+    error: RSU_COLORS.error,
   },
 };
 
-// NAVIGATION TAB (Connectée)
+// Navigation onglets (utilisateur connecté)
 function AppNavigator() {
   return (
     <Tab.Navigator
@@ -70,18 +66,25 @@ function AppNavigator() {
         tabBarIcon: ({ color, size }) => {
           const icons = {
             Dashboard: 'dashboard',
-            Enrollment: 'person_add',
-            PersonList: 'groups',
+            Enrollment: 'person-add',
+            PersonList: 'group',
             Survey: 'description',
             Sync: 'sync',
-            Profile: 'account_circle',
+            Profile: 'account-circle',
           };
-          return <Icon name={icons[route.name] || 'help'} size={size} color={color} />;
+          return (
+            <MaterialIcons
+              name={icons[route.name] || 'help-outline'}
+              size={size}
+              color={color}
+            />
+          );
         },
         tabBarActiveTintColor: RSU_COLORS.primary,
         tabBarInactiveTintColor: 'gray',
         headerStyle: { backgroundColor: RSU_COLORS.primary },
         headerTintColor: '#fff',
+        tabBarStyle: { backgroundColor: '#fff' },
       })}
     >
       <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ title: 'Accueil' }} />
@@ -99,35 +102,47 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isConnected, setIsConnected] = useState(true);
 
-  // Initialisation de l'application
+  // Désactiver certains warnings verbeux en développement (optionnel)
   useEffect(() => {
-    const initialize = async () => {
+    if (__DEV__) {
+      LogBox.ignoreLogs([
+        'Non-serializable values were found in the navigation state',
+        'Sending...',
+        // Ajoute d'autres warnings si besoin
+      ]);
+    }
+  }, []);
+
+  // Initialisation + écoute réseau
+  useEffect(() => {
+    const initializeApp = async () => {
       try {
         const userData = await authService.getCurrentUser();
         if (userData?.token) {
           setIsAuthenticated(true);
           await syncService.initialize();
         }
-      } catch (e) {
-        console.error("Erreur d'initialisation", e);
+      } catch (error) {
+        console.error('Erreur initialisation app:', error);
       } finally {
         setIsLoading(false);
       }
     };
 
-    initialize();
+    initializeApp();
 
-    // Listener Réseau
-    const unsubscribe = NetInfo.addEventListener(state => {
+    // Écoute connexion réseau + auto-sync
+    const unsubscribeNet = NetInfo.addEventListener(state => {
       setIsConnected(state.isConnected);
       if (state.isConnected && isAuthenticated) {
         syncService.syncPendingData().catch(console.error);
       }
     });
 
-    return () => unsubscribe();
-  }, [isAuthenticated]);
+    return () => unsubscribeNet();
+  }, [isAuthenticated]); // ← dépendance correcte
 
+  // Gestion login (passée au composant LoginScreen)
   const handleLogin = async (credentials) => {
     try {
       const userData = await authService.login(credentials);
@@ -137,7 +152,7 @@ export default function App() {
       }
       return { success: false, message: 'Identifiants invalides' };
     } catch (error) {
-      return { success: false, message: error.message };
+      return { success: false, message: error.message || 'Erreur connexion' };
     }
   };
 
@@ -145,7 +160,9 @@ export default function App() {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: RSU_COLORS.background }}>
         <ActivityIndicator size="large" color={RSU_COLORS.primary} />
-        <Text style={{ marginTop: 10, color: RSU_COLORS.primary }}>🇬🇦 RSU Gabon - Chargement...</Text>
+        <Text style={{ marginTop: 12, color: RSU_COLORS.primary, fontSize: 16 }}>
+          🇬🇦 RSU Gabon - Chargement...
+        </Text>
       </View>
     );
   }
@@ -155,15 +172,15 @@ export default function App() {
       <PaperProvider theme={customTheme}>
         <NavigationContainer>
           {isAuthenticated ? (
-            <Stack.Navigator>
-              <Stack.Screen name="MainTabs" component={AppNavigator} options={{ headerShown: false }} />
+            <Stack.Navigator screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="MainTabs" component={AppNavigator} />
               <Stack.Screen name="HouseholdForm" component={HouseholdFormScreen} options={{ title: 'Nouveau Ménage' }} />
               <Stack.Screen name="MapView" component={MapViewScreen} options={{ title: 'Carte' }} />
             </Stack.Navigator>
           ) : (
             <Stack.Navigator screenOptions={{ headerShown: false }}>
               <Stack.Screen name="Login">
-                {(props) => <LoginScreen {...props} onLogin={handleLogin} isConnected={isConnected} />}
+                {props => <LoginScreen {...props} onLogin={handleLogin} isConnected={isConnected} />}
               </Stack.Screen>
             </Stack.Navigator>
           )}
@@ -173,8 +190,6 @@ export default function App() {
   );
 }
 
-// MÉTADONNÉES APP
-//console.log('🇬🇦 RSU GABON Mobile App - Version 1.0.0-mobile-mvp');
-//console.log('💰 Financement: Banque Mondiale €56.2M');
-//console.log('🎯 Objectif: 2M+ citoyens gabonais');
-//console.log('🏆 Standards: Top 1% gestion projet digital');
+// Métadonnées (commentées pour ne pas polluer la console)
+// console.log('🇬🇦 RSU GABON Mobile App - v1.0.0-mobile-mvp');
+// console.log('🎯 Objectif : 2M+ citoyens gabonais recensés');
